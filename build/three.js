@@ -12312,6 +12312,7 @@ THREE.HemisphereLight.prototype.toJSON = function ( meta ) {
  * @author mrdoob / http://mrdoob.com/
  */
 
+
 THREE.PointLight = function ( color, intensity, distance, decay ) {
 
 	THREE.Light.call( this, color );
@@ -12321,6 +12322,30 @@ THREE.PointLight = function ( color, intensity, distance, decay ) {
 	this.intensity = ( intensity !== undefined ) ? intensity : 1;
 	this.distance = ( distance !== undefined ) ? distance : 0;
 	this.decay = ( decay !== undefined ) ? decay : 1;	// for physically correct lights, should be 2.
+
+	this.castShadow = false;
+	this.onlyShadow = false;
+
+	//
+
+	this.shadowCameraNear = 0;
+	this.shadowCameraFar = 5000;
+	this.shadowCameraFov = 90;
+
+	this.shadowCameraVisible = false;
+
+	this.shadowBias = 0;
+	this.shadowDarkness = 0.5;
+
+	this.shadowMapWidth = 512;
+	this.shadowMapHeight = 512;
+
+	//
+
+	this.shadowMap = null;
+	this.shadowMapSize = null;
+	this.shadowCamera = null;
+	this.shadowMatrix = null;
 
 };
 
@@ -12334,6 +12359,21 @@ THREE.PointLight.prototype.copy = function ( source ) {
 	this.intensity = source.intensity;
 	this.distance = source.distance;
 	this.decay = source.decay;
+
+	this.castShadow = source.castShadow;
+	this.onlyShadow = source.onlyShadow;
+
+	this.shadowCameraNear = source.shadowCameraNear;
+	this.shadowCameraFar = source.shadowCameraFar;
+	this.shadowCameraFov = source.shadowCameraFov;
+
+	this.shadowCameraVisible = source.shadowCameraVisible;
+
+	this.shadowBias = source.shadowBias;
+	this.shadowDarkness = source.shadowDarkness;
+
+	this.shadowMapWidth = source.shadowMapWidth;
+	this.shadowMapHeight = source.shadowMapHeight;
 
 	return this;
 
@@ -18450,7 +18490,7 @@ THREE.ShaderChunk[ 'lights_phong_pars_fragment'] = "uniform vec3 ambientLightCol
 
 // File:src/renderers/shaders/ShaderChunk/lights_phong_pars_vertex.glsl
 
-THREE.ShaderChunk[ 'lights_phong_pars_vertex'] = "#if MAX_SPOT_LIGHTS > 0 || defined( USE_ENVMAP )\n\n	varying vec3 vWorldPosition;\n\n#endif\n";
+THREE.ShaderChunk[ 'lights_phong_pars_vertex'] = "#if MAX_SPOT_LIGHTS > 0 || defined( USE_ENVMAP )\n\n	varying vec3 vWorldPosition;\n\n#endif\n\n#if MAX_POINT_LIGHTS > 0\n\n	uniform vec3 pointLightPosition[ MAX_POINT_LIGHTS ];\n\n#endif\n";
 
 // File:src/renderers/shaders/ShaderChunk/lights_phong_vertex.glsl
 
@@ -18518,19 +18558,19 @@ THREE.ShaderChunk[ 'project_vertex'] = "#ifdef USE_SKINNING\n\n	vec4 mvPosition 
 
 // File:src/renderers/shaders/ShaderChunk/shadowmap_fragment.glsl
 
-THREE.ShaderChunk[ 'shadowmap_fragment'] = "#ifdef USE_SHADOWMAP\n\n	#ifdef SHADOWMAP_DEBUG\n\n		vec3 frustumColors[3];\n		frustumColors[0] = vec3( 1.0, 0.5, 0.0 );\n		frustumColors[1] = vec3( 0.0, 1.0, 0.8 );\n		frustumColors[2] = vec3( 0.0, 0.5, 1.0 );\n\n	#endif\n\n	float fDepth;\n	vec3 shadowColor = vec3( 1.0 );\n\n	for( int i = 0; i < MAX_SHADOWS; i ++ ) {\n\n		vec3 shadowCoord = vShadowCoord[ i ].xyz / vShadowCoord[ i ].w;\n\n				// if ( something && something ) breaks ATI OpenGL shader compiler\n				// if ( all( something, something ) ) using this instead\n\n		bvec4 inFrustumVec = bvec4 ( shadowCoord.x >= 0.0, shadowCoord.x <= 1.0, shadowCoord.y >= 0.0, shadowCoord.y <= 1.0 );\n		bool inFrustum = all( inFrustumVec );\n\n		bvec2 frustumTestVec = bvec2( inFrustum, shadowCoord.z <= 1.0 );\n\n		bool frustumTest = all( frustumTestVec );\n\n		if ( frustumTest ) {\n\n			shadowCoord.z += shadowBias[ i ];\n\n			#if defined( SHADOWMAP_TYPE_PCF )\n\n						// Percentage-close filtering\n						// (9 pixel kernel)\n						// http://fabiensanglard.net/shadowmappingPCF/\n\n				float shadow = 0.0;\n\n		/*\n						// nested loops breaks shader compiler / validator on some ATI cards when using OpenGL\n						// must enroll loop manually\n\n				for ( float y = -1.25; y <= 1.25; y += 1.25 )\n					for ( float x = -1.25; x <= 1.25; x += 1.25 ) {\n\n						vec4 rgbaDepth = texture2D( shadowMap[ i ], vec2( x * xPixelOffset, y * yPixelOffset ) + shadowCoord.xy );\n\n								// doesn't seem to produce any noticeable visual difference compared to simple texture2D lookup\n								//vec4 rgbaDepth = texture2DProj( shadowMap[ i ], vec4( vShadowCoord[ i ].w * ( vec2( x * xPixelOffset, y * yPixelOffset ) + shadowCoord.xy ), 0.05, vShadowCoord[ i ].w ) );\n\n						float fDepth = unpackDepth( rgbaDepth );\n\n						if ( fDepth < shadowCoord.z )\n							shadow += 1.0;\n\n				}\n\n				shadow /= 9.0;\n\n		*/\n\n				const float shadowDelta = 1.0 / 9.0;\n\n				float xPixelOffset = 1.0 / shadowMapSize[ i ].x;\n				float yPixelOffset = 1.0 / shadowMapSize[ i ].y;\n\n				float dx0 = -1.25 * xPixelOffset;\n				float dy0 = -1.25 * yPixelOffset;\n				float dx1 = 1.25 * xPixelOffset;\n				float dy1 = 1.25 * yPixelOffset;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, dy0 ) ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( 0.0, dy0 ) ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, dy0 ) ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, 0.0 ) ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, 0.0 ) ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, dy1 ) ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( 0.0, dy1 ) ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, dy1 ) ) );\n				if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				shadowColor = shadowColor * vec3( ( 1.0 - shadowDarkness[ i ] * shadow ) );\n\n			#elif defined( SHADOWMAP_TYPE_PCF_SOFT )\n\n						// Percentage-close filtering\n						// (9 pixel kernel)\n						// http://fabiensanglard.net/shadowmappingPCF/\n\n				float shadow = 0.0;\n\n				float xPixelOffset = 1.0 / shadowMapSize[ i ].x;\n				float yPixelOffset = 1.0 / shadowMapSize[ i ].y;\n\n				float dx0 = -1.0 * xPixelOffset;\n				float dy0 = -1.0 * yPixelOffset;\n				float dx1 = 1.0 * xPixelOffset;\n				float dy1 = 1.0 * yPixelOffset;\n\n				mat3 shadowKernel;\n				mat3 depthKernel;\n\n				depthKernel[0][0] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, dy0 ) ) );\n				depthKernel[0][1] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, 0.0 ) ) );\n				depthKernel[0][2] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, dy1 ) ) );\n				depthKernel[1][0] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( 0.0, dy0 ) ) );\n				depthKernel[1][1] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy ) );\n				depthKernel[1][2] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( 0.0, dy1 ) ) );\n				depthKernel[2][0] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, dy0 ) ) );\n				depthKernel[2][1] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, 0.0 ) ) );\n				depthKernel[2][2] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, dy1 ) ) );\n\n				vec3 shadowZ = vec3( shadowCoord.z );\n				shadowKernel[0] = vec3(lessThan(depthKernel[0], shadowZ ));\n				shadowKernel[0] *= vec3(0.25);\n\n				shadowKernel[1] = vec3(lessThan(depthKernel[1], shadowZ ));\n				shadowKernel[1] *= vec3(0.25);\n\n				shadowKernel[2] = vec3(lessThan(depthKernel[2], shadowZ ));\n				shadowKernel[2] *= vec3(0.25);\n\n				vec2 fractionalCoord = 1.0 - fract( shadowCoord.xy * shadowMapSize[i].xy );\n\n				shadowKernel[0] = mix( shadowKernel[1], shadowKernel[0], fractionalCoord.x );\n				shadowKernel[1] = mix( shadowKernel[2], shadowKernel[1], fractionalCoord.x );\n\n				vec4 shadowValues;\n				shadowValues.x = mix( shadowKernel[0][1], shadowKernel[0][0], fractionalCoord.y );\n				shadowValues.y = mix( shadowKernel[0][2], shadowKernel[0][1], fractionalCoord.y );\n				shadowValues.z = mix( shadowKernel[1][1], shadowKernel[1][0], fractionalCoord.y );\n				shadowValues.w = mix( shadowKernel[1][2], shadowKernel[1][1], fractionalCoord.y );\n\n				shadow = dot( shadowValues, vec4( 1.0 ) );\n\n				shadowColor = shadowColor * vec3( ( 1.0 - shadowDarkness[ i ] * shadow ) );\n\n			#else\n\n				vec4 rgbaDepth = texture2D( shadowMap[ i ], shadowCoord.xy );\n				float fDepth = unpackDepth( rgbaDepth );\n\n				if ( fDepth < shadowCoord.z )\n\n		// spot with multiple shadows is darker\n\n					shadowColor = shadowColor * vec3( 1.0 - shadowDarkness[ i ] );\n\n		// spot with multiple shadows has the same color as single shadow spot\n\n		// 					shadowColor = min( shadowColor, vec3( shadowDarkness[ i ] ) );\n\n			#endif\n\n		}\n\n\n		#ifdef SHADOWMAP_DEBUG\n\n			if ( inFrustum ) outgoingLight *= frustumColors[ i ];\n\n		#endif\n\n	}\n\n	outgoingLight = outgoingLight * shadowColor;\n\n#endif\n";
+THREE.ShaderChunk[ 'shadowmap_fragment'] = "#ifdef USE_SHADOWMAP\n\n	#ifdef SHADOWMAP_DEBUG\n\n		vec3 frustumColors[3];\n		frustumColors[0] = vec3( 1.0, 0.5, 0.0 );\n		frustumColors[1] = vec3( 0.0, 1.0, 0.8 );\n		frustumColors[2] = vec3( 0.0, 0.5, 1.0 );\n\n	#endif\n\n	float fDepth;\n	vec3 shadowColor = vec3( 1.0 );\n\n	for( int i = 0; i < MAX_SHADOWS; i ++ ) {\n\n		// to save on uniform space, we use the sign of @shadowDarkness[ i ] to determine\n		// whether or not this light is a point light ( shadowDarkness[ i ] < 0 == point light)\n		bool isPointLight = shadowDarkness[ i ] < 0.0;\n\n		// get the real shadow darkness\n		float realShadowDarkness = abs( shadowDarkness[ i ] );\n\n		// for point lights, the uniform @vShadowCoord is re-purposed to hold\n		// the distance from the light to the world-space position of the fragment.\n		vec3 lightToPosition = vShadowCoord[ i ].xyz;\n		float cubeTexelSize = 1.0 / shadowMapSize[ i ].x;\n\n		vec3 shadowCoord = vShadowCoord[ i ].xyz / vShadowCoord[ i ].w;\n		float shadow = 0.0;\n\n		// if ( something && something ) breaks ATI OpenGL shader compiler\n		// if ( all( something, something ) ) using this instead\n\n		bvec4 inFrustumVec = bvec4 ( shadowCoord.x >= 0.0, shadowCoord.x <= 1.0, shadowCoord.y >= 0.0, shadowCoord.y <= 1.0 );\n		bool inFrustum = all( inFrustumVec );\n\n		bvec2 frustumTestVec = bvec2( inFrustum, shadowCoord.z <= 1.0 );\n\n		bool frustumTest = all( frustumTestVec );\n\n		if ( frustumTest || isPointLight ) {\n\n			shadowCoord.z += shadowBias[ i ];\n\n			#if defined( SHADOWMAP_TYPE_PCF )\n\n				#if defined(POINT_LIGHT_SHADOWS)\n\n					if( isPointLight ) {\n\n						initGridSamplingDisk();\n\n						float diskRadius = 1.5;\n						float numSamples = 1.0;\n						shadow = 0.0;\n\n						vec3 baseDirection = normalize( lightToPosition );\n						float curDistance = length( lightToPosition );\n\n						float dist = unpack1K( textureCube( shadowCube[ i ],  baseDirection ) );\n						if ( curDistance >= dist )\n							shadow += 1.0;\n						\n						// evaluate each sampling direction\n						for( int s = 0; s < 20; s++ ) {\n						 \n							vec3 offset = gridSamplingDisk[ s ] * diskRadius * cubeTexelSize;\n							dist = unpack1K( textureCube( shadowCube[ i ],  vec3( baseDirection + offset ) ) );\n							if ( curDistance >= dist )\n								shadow += 1.0;\n							numSamples += 1.0;\n							\n						}\n\n						shadow /= numSamples;\n						\n					} else {\n\n				#endif\n\n						// Percentage-close filtering\n						// (9 pixel kernel)\n						// http://fabiensanglard.net/shadowmappingPCF/\n						\n						/*\n								// nested loops breaks shader compiler / validator on some ATI cards when using OpenGL\n								// must enroll loop manually\n\n							for ( float y = -1.25; y <= 1.25; y += 1.25 )\n								for ( float x = -1.25; x <= 1.25; x += 1.25 ) {\n\n									vec4 rgbaDepth = texture2D( shadowMap[ i ], vec2( x * xPixelOffset, y * yPixelOffset ) + shadowCoord.xy );\n\n											// doesn't seem to produce any noticeable visual difference compared to simple texture2D lookup\n											//vec4 rgbaDepth = texture2DProj( shadowMap[ i ], vec4( vShadowCoord[ i ].w * ( vec2( x * xPixelOffset, y * yPixelOffset ) + shadowCoord.xy ), 0.05, vShadowCoord[ i ].w ) );\n\n									float fDepth = unpackDepth( rgbaDepth );\n\n									if ( fDepth < shadowCoord.z )\n										shadow += 1.0;\n\n							}\n\n							shadow /= 9.0;\n\n						*/\n\n						const float shadowDelta = 1.0 / 9.0;\n\n						float xPixelOffset = 1.0 / shadowMapSize[ i ].x;\n						float yPixelOffset = 1.0 / shadowMapSize[ i ].y;\n\n						float dx0 = -1.25 * xPixelOffset;\n						float dy0 = -1.25 * yPixelOffset;\n						float dx1 = 1.25 * xPixelOffset;\n						float dy1 = 1.25 * yPixelOffset;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, dy0 ) ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( 0.0, dy0 ) ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, dy0 ) ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, 0.0 ) ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, 0.0 ) ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, dy1 ) ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( 0.0, dy1 ) ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n						fDepth = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, dy1 ) ) );\n						if ( fDepth < shadowCoord.z ) shadow += shadowDelta;\n\n				#if defined(POINT_LIGHT_SHADOWS)\n\n					}\n\n				#endif\n\n				shadowColor = shadowColor * vec3( ( 1.0 - realShadowDarkness * shadow ) );\n				\n			#elif defined( SHADOWMAP_TYPE_PCF_SOFT )\n	\n				#if defined(POINT_LIGHT_SHADOWS)	\n\n					if( isPointLight ) {\n\n						initGridSamplingDisk();\n\n						float diskRadius = 2.5;\n						float numSamples = 1.0;\n						shadow = 0.0;\n\n						vec3 baseDirection = normalize( lightToPosition );\n						float curDistance = length( lightToPosition );\n\n						float dist = unpack1K( textureCube( shadowCube[ i ],  baseDirection ) );\n						if ( curDistance >= dist )\n							shadow += 1.0;\n						\n						// evaluate each sampling direction\n						for( int s = 0; s < 20; s++ ) {\n						 \n							vec3 offset = gridSamplingDisk[ s ] * diskRadius * cubeTexelSize;\n							dist = unpack1K( textureCube( shadowCube[ i ],  vec3( baseDirection + offset ) ) );\n							if ( curDistance >= dist )\n								shadow += 1.0;\n							numSamples += 1.0;\n							\n						}\n\n						shadow /= numSamples;\n\n					} else { \n\n				#endif\n\n						// Percentage-close filtering\n						// (9 pixel kernel)\n						// http://fabiensanglard.net/shadowmappingPCF/\n\n						float xPixelOffset = 1.0 / shadowMapSize[ i ].x;\n						float yPixelOffset = 1.0 / shadowMapSize[ i ].y;\n\n						float dx0 = -1.0 * xPixelOffset;\n						float dy0 = -1.0 * yPixelOffset;\n						float dx1 = 1.0 * xPixelOffset;\n						float dy1 = 1.0 * yPixelOffset;\n\n						mat3 shadowKernel;\n						mat3 depthKernel;\n\n						depthKernel[0][0] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, dy0 ) ) );\n						depthKernel[0][1] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, 0.0 ) ) );\n						depthKernel[0][2] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx0, dy1 ) ) );\n						depthKernel[1][0] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( 0.0, dy0 ) ) );\n						depthKernel[1][1] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy ) );\n						depthKernel[1][2] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( 0.0, dy1 ) ) );\n						depthKernel[2][0] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, dy0 ) ) );\n						depthKernel[2][1] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, 0.0 ) ) );\n						depthKernel[2][2] = unpackDepth( texture2D( shadowMap[ i ], shadowCoord.xy + vec2( dx1, dy1 ) ) );\n\n						vec3 shadowZ = vec3( shadowCoord.z );\n						shadowKernel[0] = vec3(lessThan(depthKernel[0], shadowZ ));\n						shadowKernel[0] *= vec3(0.25);\n\n						shadowKernel[1] = vec3(lessThan(depthKernel[1], shadowZ ));\n						shadowKernel[1] *= vec3(0.25);\n\n						shadowKernel[2] = vec3(lessThan(depthKernel[2], shadowZ ));\n						shadowKernel[2] *= vec3(0.25);\n\n						vec2 fractionalCoord = 1.0 - fract( shadowCoord.xy * shadowMapSize[i].xy );\n\n						shadowKernel[0] = mix( shadowKernel[1], shadowKernel[0], fractionalCoord.x );\n						shadowKernel[1] = mix( shadowKernel[2], shadowKernel[1], fractionalCoord.x );\n\n						vec4 shadowValues;\n						shadowValues.x = mix( shadowKernel[0][1], shadowKernel[0][0], fractionalCoord.y );\n						shadowValues.y = mix( shadowKernel[0][2], shadowKernel[0][1], fractionalCoord.y );\n						shadowValues.z = mix( shadowKernel[1][1], shadowKernel[1][0], fractionalCoord.y );\n						shadowValues.w = mix( shadowKernel[1][2], shadowKernel[1][1], fractionalCoord.y );\n\n						shadow = dot( shadowValues, vec4( 1.0 ) );\n\n				#if defined(POINT_LIGHT_SHADOWS)\n					\n					}\n\n				#endif\n\n				shadowColor = shadowColor * vec3( ( 1.0 - realShadowDarkness * shadow ) );\n\n			#else\n\n				#if defined(POINT_LIGHT_SHADOWS)\n\n					if( isPointLight ) {		\n\n							vec4 data = textureCube( shadowCube[ i ],  normalize( lightToPosition ) );\n							float dist = unpack1K( data );\n							if ( length( lightToPosition ) >= dist)\n								shadowColor = shadowColor * vec3( 1.0 - realShadowDarkness );\n							\n					} else {\n\n				#endif\n				\n						vec4 rgbaDepth = texture2D( shadowMap[ i ], shadowCoord.xy );\n						float fDepth = unpackDepth( rgbaDepth );\n\n						if ( fDepth < shadowCoord.z )\n\n						// spot with multiple shadows is darker\n\n						shadowColor = shadowColor * vec3( 1.0 - realShadowDarkness );\n\n						// spot with multiple shadows has the same color as single shadow spot\n\n						// 	shadowColor = min( shadowColor, vec3( realShadowDarkness ) );\n\n				#if defined(POINT_LIGHT_SHADOWS)\n\n					}\n\n				#endif\n\n			#endif\n\n		}\n\n\n		#ifdef SHADOWMAP_DEBUG\n\n			if ( inFrustum ) outgoingLight *= frustumColors[ i ];\n\n		#endif\n\n	}\n\n	outgoingLight = outgoingLight * shadowColor;\n\n#endif\n";
 
 // File:src/renderers/shaders/ShaderChunk/shadowmap_pars_fragment.glsl
 
-THREE.ShaderChunk[ 'shadowmap_pars_fragment'] = "#ifdef USE_SHADOWMAP\n\n	uniform sampler2D shadowMap[ MAX_SHADOWS ];\n	uniform vec2 shadowMapSize[ MAX_SHADOWS ];\n\n	uniform float shadowDarkness[ MAX_SHADOWS ];\n	uniform float shadowBias[ MAX_SHADOWS ];\n\n	varying vec4 vShadowCoord[ MAX_SHADOWS ];\n\n	float unpackDepth( const in vec4 rgba_depth ) {\n\n		const vec4 bit_shift = vec4( 1.0 / ( 256.0 * 256.0 * 256.0 ), 1.0 / ( 256.0 * 256.0 ), 1.0 / 256.0, 1.0 );\n		float depth = dot( rgba_depth, bit_shift );\n		return depth;\n\n	}\n\n#endif";
+THREE.ShaderChunk[ 'shadowmap_pars_fragment'] = "#ifdef USE_SHADOWMAP\n	\n	uniform sampler2D shadowMap[ MAX_SHADOWS ];\n	uniform vec2 shadowMapSize[ MAX_SHADOWS ];\n\n	uniform float shadowDarkness[ MAX_SHADOWS ];\n	uniform float shadowBias[ MAX_SHADOWS ];\n\n	varying vec4 vShadowCoord[ MAX_SHADOWS ];\n\n	float unpackDepth( const in vec4 rgba_depth ) {\n\n		const vec4 bit_shift = vec4( 1.0 / ( 256.0 * 256.0 * 256.0 ), 1.0 / ( 256.0 * 256.0 ), 1.0 / 256.0, 1.0 );\n		float depth = dot( rgba_depth, bit_shift );\n		return depth;\n\n	}\n\n	#if defined(POINT_LIGHT_SHADOWS)\n\n		uniform samplerCube shadowCube[ MAX_SHADOWS ];\n\n		vec4 pack1K ( float depth ) {\n		\n			depth /= 1000.0;\n			const vec4 bitSh = vec4( 256.0 * 256.0 * 256.0, 256.0 * 256.0, 256.0, 1.0 );\n	  		const vec4 bitMsk = vec4( 0.0, 1.0 / 256.0, 1.0 / 256.0, 1.0 / 256.0 );\n	   		vec4 res = fract( depth * bitSh );\n	   		res -= res.xxyz * bitMsk;\n			return res;\n			\n		}\n\n		float unpack1K ( vec4 color ) {\n		\n			const vec4 bitSh = vec4( 1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0 );\n			return dot( color, bitSh ) * 1000.0;\n			\n		}\n\n		vec3 gridSamplingDisk[ 20 ];\n		bool gridSamplingInitialized = false;\n\n		void initGridSamplingDisk(){\n\n			if( gridSamplingInitialized ){\n\n				return;\n				\n			}\n\n			gridSamplingDisk[0] = vec3(1, 1, 1);\n			gridSamplingDisk[1] = vec3(1, -1, 1);\n			gridSamplingDisk[2] = vec3(-1, -1, 1);\n			gridSamplingDisk[3] = vec3(-1, 1, 1);\n			gridSamplingDisk[4] = vec3(1, 1, -1);\n			gridSamplingDisk[5] = vec3(1, -1, -1);\n			gridSamplingDisk[6] = vec3(-1, -1, -1);\n			gridSamplingDisk[7] = vec3(-1, 1, -1);\n			gridSamplingDisk[8] = vec3(1, 1, 0);\n			gridSamplingDisk[9] = vec3(1, -1, 0);\n			gridSamplingDisk[10] = vec3(-1, -1, 0);\n			gridSamplingDisk[11] = vec3(-1, 1, 0);\n			gridSamplingDisk[12] = vec3(1, 0, 1);\n			gridSamplingDisk[13] = vec3(-1, 0, 1);\n			gridSamplingDisk[14] = vec3(1, 0, -1);\n			gridSamplingDisk[15] = vec3(-1, 0, -1);\n			gridSamplingDisk[16] = vec3(0, 1, 1);\n			gridSamplingDisk[17] = vec3(0, -1, 1);\n			gridSamplingDisk[18] = vec3(0, -1, -1);\n			gridSamplingDisk[19] = vec3(0, 1, -1);\n\n			gridSamplingInitialized = true;\n			\n		}\n\n	#endif\n\n#endif";
 
 // File:src/renderers/shaders/ShaderChunk/shadowmap_pars_vertex.glsl
 
-THREE.ShaderChunk[ 'shadowmap_pars_vertex'] = "#ifdef USE_SHADOWMAP\n\n	varying vec4 vShadowCoord[ MAX_SHADOWS ];\n	uniform mat4 shadowMatrix[ MAX_SHADOWS ];\n\n#endif";
+THREE.ShaderChunk[ 'shadowmap_pars_vertex'] = "#ifdef USE_SHADOWMAP\n\n	uniform float shadowDarkness[ MAX_SHADOWS ];\n	uniform mat4 shadowMatrix[ MAX_SHADOWS ];\n	varying vec4 vShadowCoord[ MAX_SHADOWS ];\n\n#endif";
 
 // File:src/renderers/shaders/ShaderChunk/shadowmap_vertex.glsl
 
-THREE.ShaderChunk[ 'shadowmap_vertex'] = "#ifdef USE_SHADOWMAP\n\n	for( int i = 0; i < MAX_SHADOWS; i ++ ) {\n\n		vShadowCoord[ i ] = shadowMatrix[ i ] * worldPosition;\n\n	}\n\n#endif";
+THREE.ShaderChunk[ 'shadowmap_vertex'] = "#ifdef USE_SHADOWMAP\n\n	for( int i = 0; i < MAX_SHADOWS; i ++ ) {\n\n		#if defined(POINT_LIGHT_SHADOWS)\n\n			// if shadowDarkness[ i ] < 0.0, that means we have a point light with a cube\n			// shadow map\n			if( shadowDarkness[ i ] < 0.0 ){\n\n				// When we have a point light, the @shadowMatrix uniform is used to store\n				// the inverse of the view matrix, so that we can get the world-space \n				// position of the light.\n\n				vec4 lightPositionWorld = ( shadowMatrix[ i ] * vec4( pointLightPosition[ i ], 1.0 ));\n				vec4 distanceToLight = worldPosition - lightPositionWorld;\n				distanceToLight.w = 1.0;\n				 \n				// We also repurpose vShadowCoord to hold the distance in world space from the\n				// light to the vertex. This value will be interpolated correctly in the fragment shader.\n\n				vShadowCoord[ i ] = distanceToLight;\n\n			} else {\n\n				vShadowCoord[ i ] = shadowMatrix[ i ] * worldPosition;\n\n			}\n\n		#else\n\n			vShadowCoord[ i ] = shadowMatrix[ i ] * worldPosition;\n\n		#endif\n\n	}\n\n#endif";
 
 // File:src/renderers/shaders/ShaderChunk/skinbase_vertex.glsl
 
@@ -18775,13 +18815,15 @@ THREE.UniformsLib = {
 
 	shadowmap: {
 
+		"shadowCube": { type: "tv", value: [] },
 		"shadowMap": { type: "tv", value: [] },
+
 		"shadowMapSize": { type: "v2v", value: [] },
 
 		"shadowBias" : { type: "fv1", value: [] },
 		"shadowDarkness": { type: "fv1", value: [] },
 
-		"shadowMatrix" : { type: "m4v", value: [] }
+		"shadowMatrix" : { type: "m4v", value: [] },
 
 	}
 
@@ -19626,9 +19668,76 @@ THREE.ShaderLib = {
 
 		].join( "\n" )
 
+	},
+
+	'distanceRGBA': {
+
+		uniforms: {
+
+			"lightPos": { type: "v3", value: new THREE.Vector3(0,0,0) }
+
+		},
+
+		vertexShader: [
+
+			"varying vec4 vWorldPosition;",
+
+			THREE.ShaderChunk[ "common" ],
+			THREE.ShaderChunk[ "morphtarget_pars_vertex" ],
+			THREE.ShaderChunk[ "skinning_pars_vertex" ],
+
+			"void main() {",
+
+				THREE.ShaderChunk[ "skinbase_vertex" ],
+				THREE.ShaderChunk[ "begin_vertex" ],
+				THREE.ShaderChunk[ "morphtarget_vertex" ],
+				THREE.ShaderChunk[ "skinning_vertex" ],
+				THREE.ShaderChunk[ "project_vertex" ],
+				THREE.ShaderChunk[ "worldpos_vertex" ],
+
+				"vWorldPosition = worldPosition;",
+
+			"}"
+
+		].join("\n"),
+
+		fragmentShader: [
+
+			"uniform vec3 lightPos;",
+			"varying vec4 vWorldPosition;",
+
+			THREE.ShaderChunk[ "common" ],
+
+			"vec4 pack1K ( float depth ) {",
+
+			"   depth /= 1000.0;",
+			"   const vec4 bitSh = vec4( 256.0 * 256.0 * 256.0, 256.0 * 256.0, 256.0, 1.0 );",
+  			"	const vec4 bitMsk = vec4( 0.0, 1.0 / 256.0, 1.0 / 256.0, 1.0 / 256.0 );",
+   			"	vec4 res = fract( depth * bitSh );",
+   			"	res -= res.xxyz * bitMsk;",
+   			"	return res; ",
+
+			"}",			
+			
+			"float unpack1K ( vec4 color ) {",
+
+			"	const vec4 bitSh = vec4( 1.0 / ( 256.0 * 256.0 * 256.0 ), 1.0 / ( 256.0 * 256.0 ), 1.0 / 256.0, 1.0 );",
+			"	return dot( color, bitSh ) * 1000.0;",
+
+			"}",
+
+			"void main () {",
+
+			"	gl_FragColor = pack1K( length( vWorldPosition.xyz - lightPos.xyz ) );",
+
+			"}"
+
+		].join("\n")
+
 	}
 
 };
+
 
 // File:src/renderers/WebGLRenderer.js
 
@@ -21402,7 +21511,7 @@ THREE.WebGLRenderer = function ( parameters ) {
 
 			if ( object.receiveShadow && ! material._shadowPass ) {
 
-				refreshUniformsShadow( m_uniforms, lights );
+				refreshUniformsShadow( m_uniforms, lights, camera );
 
 			}
 
@@ -21654,7 +21763,7 @@ THREE.WebGLRenderer = function ( parameters ) {
 
 	}
 
-	function refreshUniformsShadow ( uniforms, lights ) {
+	function refreshUniformsShadow ( uniforms, lights, camera ) {
 
 		if ( uniforms.shadowMatrix ) {
 
@@ -21666,14 +21775,31 @@ THREE.WebGLRenderer = function ( parameters ) {
 
 				if ( ! light.castShadow ) continue;
 
-				if ( light instanceof THREE.SpotLight || ( light instanceof THREE.DirectionalLight ) ) {
+				if ( light instanceof THREE.PointLight || light instanceof THREE.SpotLight || light instanceof THREE.DirectionalLight  ) {
 
-					uniforms.shadowMap.value[ j ] = light.shadowMap;
+					if( light instanceof THREE.PointLight ){
+
+						uniforms.shadowCube.value[ j ] = light.shadowMap;
+						uniforms.shadowMap.value[ j ] = null;
+
+						// for point lights we set the sign of the shadowDarkness uniform to be negative
+						uniforms.shadowDarkness.value[ j ] = -light.shadowDarkness;
+
+						// when we have a point light, the 'shadowMatrix' uniform is used to store
+						// the inverse of the view matrix (camera.matrixWorld), so that we can get the 
+						// world-space position of the light in the shader.
+						uniforms.shadowMatrix.value[ j ] = camera.matrixWorld;
+
+					} else {
+
+						uniforms.shadowMap.value[ j ] = light.shadowMap;
+						uniforms.shadowCube.value[ j ] = null;
+						uniforms.shadowMatrix.value[ j ] = light.shadowMatrix;
+						uniforms.shadowDarkness.value[ j ] = light.shadowDarkness;
+
+					}					
+
 					uniforms.shadowMapSize.value[ j ] = light.shadowMapSize;
-
-					uniforms.shadowMatrix.value[ j ] = light.shadowMatrix;
-
-					uniforms.shadowDarkness.value[ j ] = light.shadowDarkness;
 					uniforms.shadowBias.value[ j ] = light.shadowBias;
 
 					j ++;
@@ -22009,7 +22135,7 @@ THREE.WebGLRenderer = function ( parameters ) {
 
 				case 'tv':
 
-					// array of THREE.Texture (2d)
+					// array of THREE.Texture (2d or cube)
 
 					if ( uniform._array === undefined ) {
 
@@ -22031,8 +22157,21 @@ THREE.WebGLRenderer = function ( parameters ) {
 						textureUnit = uniform._array[ i ];
 
 						if ( ! texture ) continue;
+						
+						if ( texture instanceof THREE.CubeTexture ||
+						   ( texture.image instanceof Array && texture.image.length === 6 ) ) { // CompressedTexture can have Array in image :/
 
-						_this.setTexture( texture, textureUnit );
+							setCubeTexture( texture, textureUnit );
+
+						} else if ( texture instanceof THREE.WebGLRenderTargetCube ) {
+
+							setCubeTextureDynamic( texture, textureUnit );
+
+						} else {
+
+							_this.setTexture( texture, textureUnit );
+
+						}
 
 					}
 
@@ -22712,7 +22851,6 @@ THREE.WebGLRenderer = function ( parameters ) {
 
 					renderTargetProperties.__webglFramebuffer[ i ] = _gl.createFramebuffer();
 					renderTargetProperties.__webglRenderbuffer[ i ] = _gl.createRenderbuffer();
-
 					state.texImage2D( _gl.TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glFormat, renderTarget.width, renderTarget.height, 0, glFormat, glType, null );
 
 					setupFrameBuffer( renderTargetProperties.__webglFramebuffer[ i ], renderTarget, _gl.TEXTURE_CUBE_MAP_POSITIVE_X + i );
@@ -22822,6 +22960,13 @@ THREE.WebGLRenderer = function ( parameters ) {
 			_gl.viewport( vx, vy, width, height );
 
 			_currentFramebuffer = framebuffer;
+
+		}
+
+		if( isCube ){
+
+			var renderTargetProperties = properties.get( renderTarget );
+			_gl.framebufferTexture2D( _gl.FRAMEBUFFER, _gl.COLOR_ATTACHMENT0,  _gl.TEXTURE_CUBE_MAP_POSITIVE_X + renderTarget.activeCubeFace, renderTargetProperties.__webglTexture , 0 );
 
 		}
 
@@ -24083,6 +24228,7 @@ THREE.WebGLProgram = ( function () {
 				parameters.shadowMapEnabled ? '#define USE_SHADOWMAP' : '',
 				parameters.shadowMapEnabled ? '#define ' + shadowMapTypeDefine : '',
 				parameters.shadowMapDebug ? '#define SHADOWMAP_DEBUG' : '',
+				parameters.pointLightShadows > 0 ? '#define POINT_LIGHT_SHADOWS' : '',
 
 				parameters.sizeAttenuation ? '#define USE_SIZEATTENUATION' : '',
 
@@ -24194,6 +24340,7 @@ THREE.WebGLProgram = ( function () {
 				parameters.shadowMapEnabled ? '#define USE_SHADOWMAP' : '',
 				parameters.shadowMapEnabled ? '#define ' + shadowMapTypeDefine : '',
 				parameters.shadowMapDebug ? '#define SHADOWMAP_DEBUG' : '',
+				parameters.pointLightShadows > 0 ? '#define POINT_LIGHT_SHADOWS' : '',
 
 				parameters.logarithmicDepthBuffer ? '#define USE_LOGDEPTHBUF' : '',
 				parameters.logarithmicDepthBuffer && renderer.extensions.get( 'EXT_frag_depth' ) ? '#define USE_LOGDEPTHBUF_EXT' : '',
@@ -24391,7 +24538,7 @@ THREE.WebGLPrograms = function ( renderer, capabilities ) {
 		"flatShading", "sizeAttenuation", "logarithmicDepthBuffer", "skinning",
 		"maxBones", "useVertexTexture", "morphTargets", "morphNormals",
 		"maxMorphTargets", "maxMorphNormals", "maxDirLights", "maxPointLights",
-		"maxSpotLights", "maxHemiLights", "maxShadows", "shadowMapEnabled",
+		"maxSpotLights", "maxHemiLights", "maxShadows", "shadowMapEnabled", "pointLightShadows", 
 		"shadowMapType", "shadowMapDebug", "alphaTest", "metal", "doubleSided",
 		"flipSided"
 	];
@@ -24462,6 +24609,7 @@ THREE.WebGLPrograms = function ( renderer, capabilities ) {
 	function allocateShadows( lights ) {
 
 		var maxShadows = 0;
+		var pointLightShadows = 0;
 
 		for ( var l = 0, ll = lights.length; l < ll; l ++ ) {
 
@@ -24469,12 +24617,17 @@ THREE.WebGLPrograms = function ( renderer, capabilities ) {
 
 			if ( ! light.castShadow ) continue;
 
-			if ( light instanceof THREE.SpotLight ) maxShadows ++;
-			if ( light instanceof THREE.DirectionalLight ) maxShadows ++;
+			if ( light instanceof THREE.SpotLight || light instanceof THREE.DirectionalLight ) maxShadows ++;
+			if ( light instanceof THREE.PointLight ) {
+
+				maxShadows ++;
+				pointLightShadows ++;
+
+			} 
 
 		}
 
-		return maxShadows;
+		return { 'maxShadows': maxShadows, 'pointLightShadows': pointLightShadows };
 
 	}
 
@@ -24485,7 +24638,7 @@ THREE.WebGLPrograms = function ( renderer, capabilities ) {
 		// (not to blow over maxLights budget)
 
 		var maxLightCount = allocateLights( lights );
-		var maxShadows = allocateShadows( lights );
+		var allocatedShadows = allocateShadows( lights );
 		var maxBones = allocateBones( object );
 		var precision = renderer.getPrecision();
 
@@ -24547,8 +24700,9 @@ THREE.WebGLPrograms = function ( renderer, capabilities ) {
 			maxSpotLights: maxLightCount.spot,
 			maxHemiLights: maxLightCount.hemi,
 
-			maxShadows: maxShadows,
-			shadowMapEnabled: renderer.shadowMap.enabled && object.receiveShadow && maxShadows > 0,
+			maxShadows: allocatedShadows.maxShadows,
+			pointLightShadows: allocatedShadows.pointLightShadows,
+			shadowMapEnabled: renderer.shadowMap.enabled && object.receiveShadow && allocatedShadows.maxShadows > 0,
 			shadowMapType: renderer.shadowMap.type,
 			shadowMapDebug: renderer.shadowMap.debug,
 
@@ -24756,36 +24910,48 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 	_min = new THREE.Vector3(),
 	_max = new THREE.Vector3(),
 
-	_matrixPosition = new THREE.Vector3(),
+	_lookTarget = new THREE.Vector3(),
+	_lightPositionWorld = new THREE.Vector3(),
 
 	_renderList = [];
+
+	var _depthMaterial, _depthMaterialMorph, _depthMaterialSkin, _depthMaterialMorphSkin,
+	_distanceMaterial, _distanceMaterialMorph, _distanceMaterialSkin, _distanceMaterialMorphSkin;
+
+	var cubeDirections = [new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0), new THREE.Vector3(0,1,0),
+						  new THREE.Vector3(0,-1,0), new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1)];
+
+	var cubeUps = [new THREE.Vector3(0,-1,0), new THREE.Vector3(0,-1,0), new THREE.Vector3(0,0,1),
+				   new THREE.Vector3(0,0,-1), new THREE.Vector3(0,-1,0), new THREE.Vector3(0,-1,0)];
+
+    var _vector4 = new THREE.Vector4();
 
 	// init
 
 	var depthShader = THREE.ShaderLib[ "depthRGBA" ];
 	var depthUniforms = THREE.UniformsUtils.clone( depthShader.uniforms );
 
-	var _depthMaterial = new THREE.ShaderMaterial( {
+	_depthMaterial = new THREE.ShaderMaterial( {
 		uniforms: depthUniforms,
 		vertexShader: depthShader.vertexShader,
 		fragmentShader: depthShader.fragmentShader
 	 } );
 
-	var _depthMaterialMorph = new THREE.ShaderMaterial( {
+	_depthMaterialMorph = new THREE.ShaderMaterial( {
 		uniforms: depthUniforms,
 		vertexShader: depthShader.vertexShader,
 		fragmentShader: depthShader.fragmentShader,
 		morphTargets: true
 	} );
 
-	var _depthMaterialSkin = new THREE.ShaderMaterial( {
+	_depthMaterialSkin = new THREE.ShaderMaterial( {
 		uniforms: depthUniforms,
 		vertexShader: depthShader.vertexShader,
 		fragmentShader: depthShader.fragmentShader,
 		skinning: true
 	} );
 
-	var _depthMaterialMorphSkin = new THREE.ShaderMaterial( {
+	_depthMaterialMorphSkin = new THREE.ShaderMaterial( {
 		uniforms: depthUniforms,
 		vertexShader: depthShader.vertexShader,
 		fragmentShader: depthShader.fragmentShader,
@@ -24797,6 +24963,43 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 	_depthMaterialMorph._shadowPass = true;
 	_depthMaterialSkin._shadowPass = true;
 	_depthMaterialMorphSkin._shadowPass = true;
+
+
+	var distanceShader = THREE.ShaderLib[ "distanceRGBA" ];
+	var distanceUniforms = THREE.UniformsUtils.clone( distanceShader.uniforms );
+
+	_distanceMaterial = new THREE.ShaderMaterial( {
+		uniforms: distanceUniforms,
+		vertexShader: distanceShader.vertexShader,
+		fragmentShader: distanceShader.fragmentShader
+	 } );
+
+	_distanceMaterialMorph = new THREE.ShaderMaterial( {
+		uniforms: distanceUniforms,
+		vertexShader: distanceShader.vertexShader,
+		fragmentShader: distanceShader.fragmentShader,
+		morphTargets: true
+	} );
+
+	_distanceMaterialSkin = new THREE.ShaderMaterial( {
+		uniforms: distanceUniforms,
+		vertexShader: distanceShader.vertexShader,
+		fragmentShader: distanceShader.fragmentShader,
+		skinning: true
+	} );
+
+	_distanceMaterialMorphSkin = new THREE.ShaderMaterial( {
+		uniforms: distanceUniforms,
+		vertexShader: distanceShader.vertexShader,
+		fragmentShader: distanceShader.fragmentShader,
+		morphTargets: true,
+		skinning: true
+	} );
+
+	_distanceMaterial._shadowPass = true;
+	_distanceMaterialMorph._shadowPass = true;
+	_distanceMaterialSkin._shadowPass = true;
+	_distanceMaterialMorphSkin._shadowPass = true;
 
 	//
 
@@ -24811,6 +25014,8 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 	this.cullFace = THREE.CullFaceFront;
 
 	this.render = function ( scene, camera ) {
+
+		var faceCount, isCube;
 
 		if ( scope.enabled === false ) return;
 		if ( scope.autoUpdate === false && scope.needsUpdate === false ) return;
@@ -24841,6 +25046,18 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 
 			var light = _lights[ i ];
 
+			if ( light instanceof THREE.PointLight ) {
+
+				faceCount = 6;
+				isCube = true;
+
+			} else {
+
+				faceCount = 1;
+				isCube = false;
+
+			}
+
 			if ( ! light.castShadow ) continue;
 
 			if ( ! light.shadowMap ) {
@@ -24855,8 +25072,17 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 
 				var pars = { minFilter: shadowFilter, magFilter: shadowFilter, format: THREE.RGBAFormat };
 
-				light.shadowMap = new THREE.WebGLRenderTarget( light.shadowMapWidth, light.shadowMapHeight, pars );
-				light.shadowMapSize = new THREE.Vector2( light.shadowMapWidth, light.shadowMapHeight );
+				if ( isCube ) {
+
+					light.shadowMap = new THREE.WebGLRenderTargetCube( light.shadowMapWidth, light.shadowMapWidth, pars );
+					light.shadowMapSize = new  THREE.Vector2( light.shadowMapWidth, light.shadowMapWidth );
+
+				} else {
+
+					light.shadowMap = new THREE.WebGLRenderTarget( light.shadowMapWidth, light.shadowMapHeight, pars );
+					light.shadowMapSize = new THREE.Vector2( light.shadowMapWidth, light.shadowMapHeight );
+
+				}	
 
 				light.shadowMatrix = new THREE.Matrix4();
 
@@ -24874,8 +25100,7 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 
 				} else {
 
-					console.error( "THREE.ShadowMapPlugin: Unsupported light type for shadow", light );
-					continue;
+					light.shadowCamera = new THREE.PerspectiveCamera( light.shadowCameraFov, light.shadowMapWidth / light.shadowMapHeight, light.shadowCameraNear, light.shadowCameraFar );
 
 				}
 
@@ -24896,83 +25121,100 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 			var shadowMatrix = light.shadowMatrix;
 			var shadowCamera = light.shadowCamera;
 
-			//
+			_lightPositionWorld.setFromMatrixPosition( light.matrixWorld );
+			shadowCamera.position.copy( _lightPositionWorld);
 
-			shadowCamera.position.setFromMatrixPosition( light.matrixWorld );
-			_matrixPosition.setFromMatrixPosition( light.target.matrixWorld );
-			shadowCamera.lookAt( _matrixPosition );
-			shadowCamera.updateMatrixWorld();
+			// render shadow map for each cube face (if omni-directional) or
+			// run a single pass if not
 
-			shadowCamera.matrixWorldInverse.getInverse( shadowCamera.matrixWorld );
+			for ( var face = 0; face < faceCount; face++ ){				
+		
+				if( isCube ){
 
-			//
-
-			if ( light.cameraHelper ) light.cameraHelper.visible = light.shadowCameraVisible;
-			if ( light.shadowCameraVisible ) light.cameraHelper.update();
-
-			// compute shadow matrix
-
-			shadowMatrix.set(
-				0.5, 0.0, 0.0, 0.5,
-				0.0, 0.5, 0.0, 0.5,
-				0.0, 0.0, 0.5, 0.5,
-				0.0, 0.0, 0.0, 1.0
-			);
-
-			shadowMatrix.multiply( shadowCamera.projectionMatrix );
-			shadowMatrix.multiply( shadowCamera.matrixWorldInverse );
-
-			// update camera matrices and frustum
-
-			_projScreenMatrix.multiplyMatrices( shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse );
-			_frustum.setFromMatrix( _projScreenMatrix );
-
-			// render shadow map
-
-			_renderer.setRenderTarget( shadowMap );
-			_renderer.clear();
-
-			// set object matrices & frustum culling
-
-			_renderList.length = 0;
-
-			projectObject( scene, shadowCamera );
-
-
-			// render regular objects
-
-			for ( var j = 0, jl = _renderList.length; j < jl; j ++ ) {
-
-				var object = _renderList[ j ];
-				var geometry = _objects.update( object );
-				var material = object.material;
-
-				if ( material instanceof THREE.MeshFaceMaterial ) {
-
-					var groups = geometry.groups;
-					var materials = material.materials;
-
-					for ( var k = 0, kl = groups.length; k < kl; k ++ ) {
-
-						var group = groups[ k ];
-						var groupMaterial = materials[ group.materialIndex ];
-
-						if ( groupMaterial.visible === true ) {
-
-							_renderer.renderBufferDirect( shadowCamera, _lights, null, geometry, getDepthMaterial( object, groupMaterial ), object, group );
-
-						}
-
-					}
+					_lookTarget.copy( shadowCamera.position );
+					_lookTarget.add( cubeDirections[face] );
+					shadowCamera.up.copy( cubeUps[face] );
+					shadowCamera.lookAt( _lookTarget );	
+					shadowMap.activeCubeFace = face;
 
 				} else {
 
-					_renderer.renderBufferDirect( shadowCamera, _lights, null, geometry, getDepthMaterial( object, material ), object );
+					_lookTarget.setFromMatrixPosition( light.target.matrixWorld );
+					shadowCamera.lookAt( _lookTarget );
+
+				}	
+
+				shadowCamera.updateMatrixWorld();
+				shadowCamera.matrixWorldInverse.getInverse( shadowCamera.matrixWorld );
+
+				if ( light.cameraHelper ) light.cameraHelper.visible = light.shadowCameraVisible;
+				if ( light.shadowCameraVisible ) light.cameraHelper.update();
+
+				// compute shadow matrix
+
+				shadowMatrix.set(
+					0.5, 0.0, 0.0, 0.5,
+					0.0, 0.5, 0.0, 0.5,
+					0.0, 0.0, 0.5, 0.5,
+					0.0, 0.0, 0.0, 1.0
+				);
+
+				shadowMatrix.multiply( shadowCamera.projectionMatrix );
+				shadowMatrix.multiply( shadowCamera.matrixWorldInverse );
+
+				// update camera matrices and frustum
+
+				_projScreenMatrix.multiplyMatrices( shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse );
+				_frustum.setFromMatrix( _projScreenMatrix );
+
+				// render shadow map	
+
+				_renderer.setRenderTarget( shadowMap );
+				_renderer.clear();
+
+				// set object matrices & frustum culling
+
+				_renderList.length = 0;
+
+				projectObject( scene, shadowCamera );
+
+				// render regular objects
+
+				for ( var j = 0, jl = _renderList.length; j < jl; j ++ ) {
+
+					var object = _renderList[ j ];
+					var geometry = _objects.update( object );
+					var material = object.material;
+
+					if ( material instanceof THREE.MeshFaceMaterial ) {
+
+						var groups = geometry.groups;
+						var materials = material.materials;
+
+						for ( var k = 0, kl = groups.length; k < kl; k ++ ) {
+
+							var group = groups[ k ];
+							var groupMaterial = materials[ group.materialIndex ];
+
+							if ( groupMaterial.visible === true ) {
+
+								var depthMaterial = getDepthMaterial( object, groupMaterial, isCube, _lightPositionWorld );
+								_renderer.renderBufferDirect( shadowCamera, _lights, null, geometry, depthMaterial , object, group );
+
+							}
+
+						}
+
+					} else {
+
+						var depthMaterial = getDepthMaterial( object, material, isCube, _lightPositionWorld );						
+						_renderer.renderBufferDirect( shadowCamera, _lights, null, geometry, depthMaterial, object );
+
+					}
 
 				}
 
 			}
-
 		}
 
 		// restore GL state
@@ -24995,38 +25237,66 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 
 	};
 
-	function getDepthMaterial( object, material ) {
+	function getDepthMaterial( object, material, isCube, lightPositionWorld) {
 
 		var geometry = object.geometry;
 
 		var useMorphing = geometry.morphTargets !== undefined && geometry.morphTargets.length > 0 && material.morphTargets;
 		var useSkinning = object instanceof THREE.SkinnedMesh && material.skinning;
 
-		var depthMaterial;
+		var newMaterial;
 
-		if ( object.customDepthMaterial ) {
+		var depthMaterial = _depthMaterial;
+		var depthMaterialMorph = _depthMaterialMorph; 
+		var depthMaterialSkin = _depthMaterialSkin; 
+		var depthMaterialMorphSkin = _depthMaterialMorphSkin;
 
-			depthMaterial = object.customDepthMaterial;
+		if ( isCube ){
+
+			depthMaterial = _distanceMaterial;
+			depthMaterialMorph = _distanceMaterialMorph; 
+			depthMaterialSkin = _distanceMaterialSkin; 
+			depthMaterialMorphSkin = _distanceMaterialMorphSkin;
+		}
+
+		if ( object.customDepthMaterial || object.customDistanceMaterial ) {
+
+			if ( isCube ){
+
+				newMaterial = object.customDistanceMaterial;
+
+			} else {
+
+				newMaterial = object.customDepthMaterial;
+			}
 
 		} else if ( useSkinning ) {
 
-			depthMaterial = useMorphing ? _depthMaterialMorphSkin : _depthMaterialSkin;
+			newMaterial = useMorphing ? depthMaterialMorphSkin : depthMaterialSkin;
 
 		} else if ( useMorphing ) {
 
-			depthMaterial = _depthMaterialMorph;
+			newMaterial = depthMaterialMorph;
 
 		} else {
 
-			depthMaterial = _depthMaterial;
+			newMaterial = depthMaterial;
 
 		}
 
-		depthMaterial.visible = material.visible;
-		depthMaterial.wireframe = material.wireframe;
-		depthMaterial.wireframeLinewidth = material.wireframeLinewidth;
+		newMaterial.visible = material.visible;
+		newMaterial.wireframe = material.wireframe;
+		newMaterial.wireframeLinewidth = material.wireframeLinewidth;
 
-		return depthMaterial;
+		if ( isCube ){
+
+			if( newMaterial.uniforms.lightPos ){
+
+				newMaterial.uniforms.lightPos.value.copy( lightPositionWorld );
+			}
+		}
+
+		return newMaterial;
 
 	}
 
@@ -25041,7 +25311,6 @@ THREE.WebGLShadowMap = function ( _renderer, _lights, _objects ) {
 				var material = object.material;
 
 				if ( material.visible === true ) {
-
 					object.modelViewMatrix.multiplyMatrices( camera.matrixWorldInverse, object.matrixWorld );
 					_renderList.push( object );
 
