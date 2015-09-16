@@ -366,7 +366,9 @@ THREE.ShaderLib = {
 				THREE.ShaderChunk[ "alphamap_fragment" ],
 				THREE.ShaderChunk[ "alphatest_fragment" ],
 				THREE.ShaderChunk[ "specularmap_fragment" ],
+				THREE.ShaderChunk[ "normal_phong_fragment" ],
 				THREE.ShaderChunk[ "lightmap_fragment" ],
+				THREE.ShaderChunk[ "hemilight_fragment" ],
 				THREE.ShaderChunk[ "aomap_fragment" ],
 				THREE.ShaderChunk[ "emissivemap_fragment" ],
 
@@ -835,7 +837,6 @@ THREE.ShaderLib = {
 
 	},
 
-
 	'distanceRGBA': {
 
 		uniforms: {
@@ -903,3 +904,4 @@ THREE.ShaderLib = {
 	}
 
 };
+
